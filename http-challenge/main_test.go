@@ -7,21 +7,32 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gofiber/fiber/v2"
 )
 
-// newTestServer spins up a fresh store + mux per test so tests don't
+// newTestApp spins up a fresh store + app per test so tests don't
 // interfere with each other's task IDs.
-func newTestServer() *httptest.Server {
+func newTestApp() *fiber.App {
 	h := &taskHandlers{store: NewTaskStore()}
-	return httptest.NewServer(newMux(h))
+	return newApp(h)
+}
+
+// jsonRequest builds an httptest.Request with a JSON body and the right
+// Content-Type header — Fiber's BodyParser needs that header set to know
+// how to decode the body.
+func jsonRequest(method, target string, body any) *http.Request {
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(method, target, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	return req
 }
 
 func TestCreateAndList(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	body, _ := json.Marshal(createTaskRequest{Title: "write tests"})
-	resp, err := http.Post(srv.URL+"/tasks", "application/json", bytes.NewReader(body))
+	req := jsonRequest(http.MethodPost, "/tasks", createTaskRequest{Title: "write tests"})
+	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatalf("POST /tasks failed: %v", err)
 	}
@@ -42,7 +53,7 @@ func TestCreateAndList(t *testing.T) {
 		t.Fatalf("expected a non-zero ID, got %+v", created)
 	}
 
-	listResp, err := http.Get(srv.URL + "/tasks")
+	listResp, err := app.Test(httptest.NewRequest(http.MethodGet, "/tasks", nil))
 	if err != nil {
 		t.Fatalf("GET /tasks failed: %v", err)
 	}
@@ -58,11 +69,10 @@ func TestCreateAndList(t *testing.T) {
 }
 
 func TestCreateEmptyTitleRejected(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	body, _ := json.Marshal(createTaskRequest{Title: ""})
-	resp, err := http.Post(srv.URL+"/tasks", "application/json", bytes.NewReader(body))
+	req := jsonRequest(http.MethodPost, "/tasks", createTaskRequest{Title: ""})
+	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatalf("POST /tasks failed: %v", err)
 	}
@@ -74,18 +84,16 @@ func TestCreateEmptyTitleRejected(t *testing.T) {
 }
 
 func TestGetTask(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	body, _ := json.Marshal(createTaskRequest{Title: "find me"})
-	createResp, _ := http.Post(srv.URL+"/tasks", "application/json", bytes.NewReader(body))
+	createResp, _ := app.Test(jsonRequest(http.MethodPost, "/tasks", createTaskRequest{Title: "find me"}))
 	var created Task
 	json.NewDecoder(createResp.Body).Decode(&created)
 	createResp.Body.Close()
 
-	getResp, err := http.Get(fmt.Sprintf("%s/tasks/%d", srv.URL, created.ID))
+	getResp, err := app.Test(httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", created.ID), nil))
 	if err != nil {
-		t.Fatalf("GET /tasks/{id} failed: %v", err)
+		t.Fatalf("GET /tasks/:id failed: %v", err)
 	}
 	defer getResp.Body.Close()
 
@@ -101,10 +109,9 @@ func TestGetTask(t *testing.T) {
 }
 
 func TestGetMissingTaskReturns404(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	resp, err := http.Get(srv.URL + "/tasks/999")
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/tasks/999", nil))
 	if err != nil {
 		t.Fatalf("GET /tasks/999 failed: %v", err)
 	}
@@ -116,19 +123,16 @@ func TestGetMissingTaskReturns404(t *testing.T) {
 }
 
 func TestMarkDone(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	body, _ := json.Marshal(createTaskRequest{Title: "finish this"})
-	createResp, _ := http.Post(srv.URL+"/tasks", "application/json", bytes.NewReader(body))
+	createResp, _ := app.Test(jsonRequest(http.MethodPost, "/tasks", createTaskRequest{Title: "finish this"}))
 	var created Task
 	json.NewDecoder(createResp.Body).Decode(&created)
 	createResp.Body.Close()
 
-	req, _ := http.NewRequest(http.MethodPatch, fmt.Sprintf("%s/tasks/%d/done", srv.URL, created.ID), nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := app.Test(httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/tasks/%d/done", created.ID), nil))
 	if err != nil {
-		t.Fatalf("PATCH /tasks/{id}/done failed: %v", err)
+		t.Fatalf("PATCH /tasks/:id/done failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -144,19 +148,16 @@ func TestMarkDone(t *testing.T) {
 }
 
 func TestDeleteTask(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
+	app := newTestApp()
 
-	body, _ := json.Marshal(createTaskRequest{Title: "delete me"})
-	createResp, _ := http.Post(srv.URL+"/tasks", "application/json", bytes.NewReader(body))
+	createResp, _ := app.Test(jsonRequest(http.MethodPost, "/tasks", createTaskRequest{Title: "delete me"}))
 	var created Task
 	json.NewDecoder(createResp.Body).Decode(&created)
 	createResp.Body.Close()
 
-	req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/tasks/%d", srv.URL, created.ID), nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := app.Test(httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/tasks/%d", created.ID), nil))
 	if err != nil {
-		t.Fatalf("DELETE /tasks/{id} failed: %v", err)
+		t.Fatalf("DELETE /tasks/:id failed: %v", err)
 	}
 	resp.Body.Close()
 
@@ -164,7 +165,7 @@ func TestDeleteTask(t *testing.T) {
 		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 
-	getResp, err := http.Get(fmt.Sprintf("%s/tasks/%d", srv.URL, created.ID))
+	getResp, err := app.Test(httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", created.ID), nil))
 	if err != nil {
 		t.Fatalf("GET after delete failed: %v", err)
 	}

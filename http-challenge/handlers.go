@@ -1,34 +1,34 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
-	"net/http"
+
+	"github.com/gofiber/fiber/v2"
 )
 
-// Exercise: HTTP server — a tiny task-tracker API
+// Exercise: HTTP server — a tiny task-tracker API (Fiber edition)
 //
 // Concepts:
-//   - net/http.ServeMux (the version built into Go 1.22+) supports method +
-//     path-pattern routes directly: mux.HandleFunc("GET /tasks/{id}", ...).
-//     No third-party router needed. `{id}` is a wildcard segment you read
-//     back with r.PathValue("id").
-//   - A handler has the signature `func(w http.ResponseWriter, r *http.Request)`.
-//     You write the response by calling methods on w — and the ORDER
-//     matters: any headers (w.Header().Set(...)) and w.WriteHeader(status)
-//     must happen BEFORE you call w.Write / json.NewEncoder(w).Encode(...).
-//     Once you've written body bytes, the status is locked in as whatever
-//     it was (200 by default if you never called WriteHeader).
-//   - encoding/json: `json.NewEncoder(w).Encode(v)` writes v as JSON
-//     straight to the response body. `json.NewDecoder(r.Body).Decode(&v)`
-//     reads a JSON request body into v. Both can fail — a malformed
-//     request body should get a 400, not a crash.
+//   - A Fiber handler has the signature `func(c *fiber.Ctx) error`. You
+//     read the request and write the response through c, and the return
+//     value is what Fiber's error-handling middleware acts on — on the
+//     success path you can almost always just `return c.JSON(...)` etc.
+//     directly, since those methods already return an error themselves.
+//   - c.BodyParser(&v) decodes the request body into v — it looks at the
+//     Content-Type header to pick JSON/form/etc, so requests need
+//     `Content-Type: application/json` set for a JSON body to parse.
+//   - c.Status(code) sets the status for the response that follows it in
+//     the same chain — `c.Status(fiber.StatusCreated).JSON(task)`. If you
+//     never call Status, a successful response defaults to 200.
+//   - c.Params("id") reads a route param (the ":id" segment from
+//     routes.go). It's always a string — you still need strconv to get an
+//     int out of it, same as before.
 //
 // This is a bigger exercise than the earlier ones. Do the handlers in the
-// order they appear — each one is a bit more involved than the last.
+// order they appear.
 //
 // The store (store.go) is fully implemented — use it, don't reimplement
-// task storage here. routes.go wires these handlers to a *http.ServeMux —
+// task storage here. routes.go wires these handlers to a *fiber.App —
 // also given, don't modify it.
 
 type taskHandlers struct {
@@ -42,68 +42,108 @@ type createTaskRequest struct {
 
 // YOUR TASK 1: handleCreate
 //
-//	STEP 1: decode the request body into a createTaskRequest using
-//	        json.NewDecoder(r.Body).Decode(&req). If it errors, write
-//	        http.StatusBadRequest and return (nothing else to do).
+//	STEP 1: declare `var req createTaskRequest` and call
+//	        c.BodyParser(&req). If it errors, return
+//	        `c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})`
+//	        — that single line both writes the response AND is the value
+//	        this handler returns.
 //
-//	STEP 2: if req.Title is empty, write http.StatusBadRequest and return.
-//	        (A task with no title isn't valid input.)
+//	STEP 2: if req.Title is empty, return the same shape of response with
+//	        message "title is required".
 //
 //	STEP 3: call h.store.Create(req.Title) to get the new *Task.
 //
-//	STEP 4: set the response header `w.Header().Set("Content-Type", "application/json")`,
-//	        then `w.WriteHeader(http.StatusCreated)` — in that order, and
-//	        both BEFORE you encode the body.
-//
-//	STEP 5: encode the task as the JSON response body:
-//	        `json.NewEncoder(w).Encode(task)`.
-func (h *taskHandlers) handleCreate(w http.ResponseWriter, r *http.Request) {
-	panic("implement me")
+//	STEP 4: return `c.Status(fiber.StatusCreated).JSON(task)`.
+func (h *taskHandlers) handleCreate(c *fiber.Ctx) error {
+	var req *createTaskRequest
+
+	err := c.BodyParser(&req)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+
+	if req.Title == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "title is required"})
+	}
+
+	result := h.store.Create(req.Title)
+
+	return c.Status(fiber.StatusCreated).JSON(result)
+
 }
 
 // YOUR TASK 2: handleList
 //
 //	STEP 1: call h.store.List() to get all tasks.
 //
-//	STEP 2: set the Content-Type header to "application/json" (no need to
-//	        call WriteHeader — 200 is the default if you never set one).
-//
-//	STEP 3: encode the slice of tasks as the JSON response body.
+//	STEP 2: return c.JSON(tasks) — no need to set a status, 200 is the
+//	        default.
 //
 // This one's short — a warm-up before the ID-based handlers below.
-func (h *taskHandlers) handleList(w http.ResponseWriter, r *http.Request) {
-	panic("implement me")
+func (h *taskHandlers) handleList(c *fiber.Ctx) error {
+	result := h.store.List()
+
+	return c.Status(200).JSON(result)
 }
 
-// parseID is provided — don't modify it. It reads the "{id}" path value
-// from the request and parses it as an int, used by the three handlers
+// parseID is provided — don't modify it. It reads the ":id" route param
+// from the context and parses it as an int, used by the three handlers
 // below.
-func parseID(r *http.Request) (int, error) {
-	return parseIntStrict(r.PathValue("id"))
+func parseID(c *fiber.Ctx) (int, error) {
+	return parseIntStrict(c.Params("id"))
 }
 
 // YOUR TASK 3: handleGet
 //
-//	STEP 1: call parseID(r). If it errors, write http.StatusBadRequest and
-//	        return.
+//	STEP 1: call parseID(c). If it errors, return
+//	        `c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id"})`.
 //
 //	STEP 2: call h.store.Get(id). If it returns ErrNotFound (check with
-//	        `errors.Is(err, ErrNotFound)`), write http.StatusNotFound and
-//	        return. If it's some other non-nil error, write
-//	        http.StatusInternalServerError and return.
+//	        `errors.Is(err, ErrNotFound)`), return a 404 in the same
+//	        fiber.Map shape. If it's some other non-nil error, return a
+//	        500 the same way.
 //
-//	STEP 3: set Content-Type to "application/json" and encode the task.
-func (h *taskHandlers) handleGet(w http.ResponseWriter, r *http.Request) {
-	panic("implement me")
+//	STEP 3: return c.JSON(task).
+func (h *taskHandlers) handleGet(c *fiber.Ctx) error {
+
+	id, err := parseID(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_id"})
+	}
+
+	result, err := h.store.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": ErrNotFound})
+	}
+
+	return c.Status(200).JSON(result)
+
 }
 
 // YOUR TASK 4: handleMarkDone
 //
 // Same shape as handleGet, but calls h.store.MarkDone(id) instead of Get.
 // Same error handling: ErrNotFound -> 404, anything else -> 500, success ->
-// 200 with the updated task encoded as JSON.
-func (h *taskHandlers) handleMarkDone(w http.ResponseWriter, r *http.Request) {
-	panic("implement me")
+// c.JSON(task) with the updated task (200 by default).
+func (h *taskHandlers) handleMarkDone(c *fiber.Ctx) error {
+
+	id, err := parseID(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_id"})
+	}
+
+	result, err := h.store.MarkDone(id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": ErrNotFound})
+	}
+
+	return c.Status(200).JSON(result)
 }
 
 // YOUR TASK 5: handleDelete
@@ -112,21 +152,20 @@ func (h *taskHandlers) handleMarkDone(w http.ResponseWriter, r *http.Request) {
 //
 //	STEP 2: call h.store.Delete(id). ErrNotFound -> 404.
 //
-//	STEP 3: on success, write http.StatusNoContent (204) and return —
-//	        no body to encode for a 204. Don't call json.Encode here; a 204
-//	        response has an empty body by convention and encoding `nil`
-//	        would write the four bytes "null", which isn't valid for this
-//	        status code.
-func (h *taskHandlers) handleDelete(w http.ResponseWriter, r *http.Request) {
-	panic("implement me")
-}
+//	STEP 3: on success, return `c.SendStatus(fiber.StatusNoContent)` — no
+//	        body for a 204, so don't also call .JSON() on this one.
+func (h *taskHandlers) handleDelete(c *fiber.Ctx) error {
+	id, err := parseID(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_id"})
+	}
 
-// writeError is a small helper you may find useful in the handlers above:
-// writeError(w, http.StatusNotFound, "task not found")
-func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	err = h.store.Delete(id)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 var errBadID = errors.New("invalid id")

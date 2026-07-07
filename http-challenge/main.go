@@ -1,10 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"log"
-	"net/http"
-)
+import "log"
 
 // Given — don't modify. Once the handlers in handlers.go are implemented,
 // run this with `go run .` and try it against curl:
@@ -16,12 +12,11 @@ import (
 //	curl -X DELETE localhost:8080/tasks/1
 //
 // Or run `go test ./...` — main_test.go exercises all five handlers
-// without needing a real running server (httptest.NewRecorder).
+// via Fiber's app.Test(), no real listening socket needed.
 func main() {
 	h := &taskHandlers{store: NewTaskStore()}
-	mux := newMux(h)
+	app := newApp(h)
 
-	addr := ":8080"
-	fmt.Println("listening on", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Println("listening on :8080")
+	log.Fatal(app.Listen(":8080"))
 }
