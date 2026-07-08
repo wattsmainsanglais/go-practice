@@ -55,7 +55,7 @@ type createTaskRequest struct {
 //
 //	STEP 4: return `c.Status(fiber.StatusCreated).JSON(task)`.
 func (h *taskHandlers) handleCreate(c *fiber.Ctx) error {
-	var req *createTaskRequest
+	var req createTaskRequest
 
 	err := c.BodyParser(&req)
 	if err != nil {
@@ -114,9 +114,9 @@ func (h *taskHandlers) handleGet(c *fiber.Ctx) error {
 	result, err := h.store.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+			return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 		}
-		return c.Status(500).JSON(fiber.Map{"error": ErrNotFound})
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.Status(200).JSON(result)
@@ -138,9 +138,9 @@ func (h *taskHandlers) handleMarkDone(c *fiber.Ctx) error {
 	result, err := h.store.MarkDone(id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+			return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 		}
-		return c.Status(500).JSON(fiber.Map{"error": ErrNotFound})
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.Status(200).JSON(result)
@@ -162,7 +162,7 @@ func (h *taskHandlers) handleDelete(c *fiber.Ctx) error {
 
 	err = h.store.Delete(id)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": ErrNotFound})
+		return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
